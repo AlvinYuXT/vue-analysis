@@ -41,6 +41,8 @@ export function Observer (value) {
   this.value = value
   this.dep = new Dep()
   def(value, '__ob__', this)
+
+  // 判断是都能利用__proto__继承修改过的数组方法,不能的话就一个一个应用
   if (isArray(value)) {
     var augment = hasProto
       ? protoAugment
@@ -160,6 +162,11 @@ function copyAugment (target, src, keys) {
  */
 
 export function observe (value, vm) {
+
+  /** 最开始传进来的data都是对象,
+   * 如果是在defineReactive中oberve的val 就有可能是原始值,
+   * 直接由defineReactive后序处理这里不处理
+   */
   if (!value || typeof value !== 'object') {
     return
   }
@@ -194,6 +201,7 @@ export function observe (value, vm) {
 export function defineReactive (obj, key, val) {
   var dep = new Dep()
 
+  // 获取对象的描述符,包括writeable等信息
   var property = Object.getOwnPropertyDescriptor(obj, key)
   if (property && property.configurable === false) {
     return

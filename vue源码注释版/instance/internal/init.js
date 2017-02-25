@@ -1,8 +1,10 @@
-import { mergeOptions } from '../../util/index'
+import {
+  mergeOptions
+} from '../../util/index'
 
 let uid = 0
 
-export default function (Vue) {
+export default function(Vue) {
   /**
    * The main init sequence. This is called for every
    * instance, including ones that are created from extended
@@ -14,43 +16,42 @@ export default function (Vue) {
    *                           in to the constructor.
    */
 
-  Vue.prototype._init = function (options) {
+  Vue.prototype._init = function(options) {
     options = options || {}
 
     this.$el = null
-    this.$parent = options.parent
-    this.$root = this.$parent
-      ? this.$parent.$root
-      : this
+    this.$parent = options.parent // 每一个实例都会调用这个方法，所以子组件是会有这个parent属性的
+    this.$root = this.$parent ? this.$parent.$root : this
     this.$children = []
-    this.$refs = {}       // child vm references
-    this.$els = {}        // element references
-    this._watchers = []   // all watchers as an array
+    this.$refs = {} // child vm references
+    this.$els = {} // element references
+    this._watchers = [] // all watchers as an array
     this._directives = [] // all directives
 
     // a uid
-    this._uid = uid++
+    this._uid = uid++ // 每一个组件都有一个特定的uid
 
-    // a flag to avoid this being observed
-    this._isVue = true
+      // a flag to avoid this being observed  为什么这个对象不能被observed
+      this._isVue = true
 
     // events bookkeeping
-    this._events = {}            // registered callbacks
-    this._eventsCount = {}       // for $broadcast optimization
+    this._events = {} // registered callbacks
+    this._eventsCount = {} // for $broadcast optimization
 
+    // 你们在说啥？？？？绑定的html片段???
     // fragment instance properties
     this._isFragment = false
-    this._fragment =         // @type {DocumentFragment}
-    this._fragmentStart =    // @type {Text|Comment}
-    this._fragmentEnd = null // @type {Text|Comment}
+    this._fragment = // @type {DocumentFragment}
+      this._fragmentStart = // @type {Text|Comment}
+      this._fragmentEnd = null // @type {Text|Comment}
 
     // lifecycle state
     this._isCompiled =
-    this._isDestroyed =
-    this._isReady =
-    this._isAttached =
-    this._isBeingDestroyed =
-    this._vForRemoving = false
+      this._isDestroyed =
+      this._isReady =
+      this._isAttached =
+      this._isBeingDestroyed =
+      this._vForRemoving = false
     this._unlinkFn = null
 
     // context:
@@ -66,9 +67,9 @@ export default function (Vue) {
     // and container directives.
     this._scope = options._scope
 
-    // fragment:
+    // fragment: 针对子组件？？？？
     // if this instance is compiled inside a Fragment, it
-    // needs to reigster itself as a child of that fragment
+    // needs to regster itself as a child of that fragment
     // for attach/detach to work properly.
     this._frag = options._frag
     if (this._frag) {

@@ -21,7 +21,7 @@ export default function (Vue) {
    * requires observing the new object and updating
    * proxied properties.
    */
-
+  // 将$data挂载在Vue的原型上,这样就可以暴露$data为外部访问
   Object.defineProperty(Vue.prototype, '$data', {
     get () {
       return this._data
