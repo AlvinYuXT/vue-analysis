@@ -42,24 +42,49 @@ export default function Watcher (vm, expOrFn, cb, options) {
   this.vm = vm
   vm._watchers.push(this)
   this.expression = expOrFn
+  // 把回调放在this上, 在完成了一轮的数据变动之后,在批处理最后阶段执行cb, cb一般是dom操作
   this.cb = cb
   this.id = ++uid // uid for batching
   this.active = true
+  // lazy watcher是在计算属性里用到的,Vue在初始化时会封装你的计算属性的getter,
+  // 并在里面闭包了一个新创建的lazy watcher,详见instance/internal/state.js:Vue.prototype._initComputed函数
+  // 而指令bind函数中创建的那个并不是lazy watcher,即使这个指令是绑定到一个计算属性上的,请注意区分
+  // lazy不会像一般的指令的watcher那样在这个watcher构造函数里计算初始值(this.value)
+  // 求值的时机是在外界get这个计算属性时(参见http://v1-cn.vuejs.org/guide/reactivity.html#计算属性的奥秘),
+  // 而计算属性的getter里写有了逻辑,如果他的lazy watcher的dirty是false,
+  // 就拿出之前计算过的值返回给你(dirty的意思表示是数据的依赖有变化,你需要重新计算)
+  // 否则就会使用Watcher.prototype.evaluate完成求值,
+  // 一旦指定lazy为true,那么这个数据就肯定是dirty的
+  // 因此初始化时,是从没有计算过的,数据是undefined,并非正确的值,因此肯定需要计算,所以this.dirty = this.lazy
   this.dirty = this.lazy // for lazy watchers
+  // 用deps存储当前的依赖,而新一轮的依赖收集过程中收集到的依赖则会放到newDeps中
+  // 之所以要用一个新的数组存放新的依赖是因为当依赖变动之后,
+  // 比如由依赖a和b变成依赖a和c
+  // 那么需要把原先的依赖订阅清除掉,也就是从b的subs数组中移除当前watcher,因为我已经不想监听b的变动
+  // 所以我需要比对deps和newDeps,找出那些不再依赖的dep,然后dep.removeSub(当前watcher),这一步在afterGet中完成
   this.deps = []
   this.newDeps = []
+  // 这两个set是用来提升比对过程的效率,不用set的话,判断deps中的一个dep是否在newDeps中的复杂度是O(n)
+  // 改用set来判断的话,就是O(1)
   this.depIds = new Set()
   this.newDepIds = new Set()
   this.prevError = null // for async error stacks
   // parse expression for getter/setter
   if (isFn) {
+    // 对于计算属性来说,就会进入到这里
     this.getter = expOrFn
     this.setter = undefined
   } else {
+    // 把expression解析为一个对象,对象的get/set属性存放了获取/设置的函数
+    // 比如hello解析的get函数为function(scope) {return scope.hello;}
     var res = parseExpression(expOrFn, this.twoWay)
     this.getter = res.get
+    // 比如scope.a = {b: {c: 0}} 而expression为a.b.c
+    // 执行res.set(scope, 123)能得到scope.a变成{b: {c: 0}}
     this.setter = res.set
   }
+  // 执行get(),既拿到表达式的值,又完成第一轮的依赖收集,使得watcher订阅到相关的依赖
+  // 如果是lazy则不在此处计算初值
   this.value = this.lazy
     ? undefined
     : this.get()
@@ -73,10 +98,17 @@ export default function Watcher (vm, expOrFn, cb, options) {
  */
 
 Watcher.prototype.get = function () {
+  // beforeGet就一行: Dep.target = this
   this.beforeGet()
+  // v-for情况下,this.scope有值,是对应的数组元素
   var scope = this.scope || this.vm
   var value
   try {
+    // 执行getter,这一步很精妙,表面上看是求出指令的初始值,
+    // 其实也完成了初始的依赖收集操作,即:让当前的Watcher订阅到对应的依赖(Dep)
+    // 比如a+b这样的expression实际是依赖两个a和b变量,this.getter的求值过程中
+    // 会依次触发a 和 b的getter,在observer/index.js:defineReactive函数中,我们定义好了他们的getter
+    // 他们的getter会将Dep.target也就是当前Watcher加入到自己的subs(订阅者数组)里
     value = this.getter.call(scope, scope)
   } catch (e) {
     if (
@@ -174,10 +206,15 @@ Watcher.prototype.beforeGet = function () {
 
 Watcher.prototype.addDep = function (dep) {
   var id = dep.id
+  // 如果newDepIds里已经有了这个Dep的id, 说明这一轮的依赖收集过程已经完成过这个依赖的处理了
+  // 比如a + b + a这样的表达式,第二个a在get时就没必要在收集一次了
   if (!this.newDepIds.has(id)) {
     this.newDepIds.add(id)
     this.newDeps.push(dep)
     if (!this.depIds.has(id)) {
+      // 如果连depIds里都没有,说明之前就没有收集过这个依赖,依赖的订阅者里面没有我这个Watcher,
+      // 所以加进去
+      // 一般发生在第一次依赖收集时
       dep.addSub(this)
     }
   }
@@ -186,7 +223,9 @@ Watcher.prototype.addDep = function (dep) {
 /**
  * Clean up for dependency collection.
  */
-
+// 新一轮的依赖收集后,依赖被收集到this.newDepIds和this.newDeps里
+// this.deps存储的上一轮的的依赖此时将会被遍历, 找出其中不再依赖的dep,将自己从dep的subs列表中清除
+// 不再订阅那些不依赖的dep
 Watcher.prototype.afterGet = function () {
   Dep.target = null
   var i = this.deps.length
@@ -196,10 +235,12 @@ Watcher.prototype.afterGet = function () {
       dep.removeSub(this)
     }
   }
+  // 清除订阅完成,this.depIds和this.newDepIds交换后清空this.newDepIds
   var tmp = this.depIds
   this.depIds = this.newDepIds
   this.newDepIds = tmp
   this.newDepIds.clear()
+  // 同上,清空数组
   tmp = this.deps
   this.deps = this.newDeps
   this.newDeps = tmp
@@ -215,6 +256,7 @@ Watcher.prototype.afterGet = function () {
 
 Watcher.prototype.update = function (shallow) {
   if (this.lazy) {
+    // lazy模式下,标记下当前是脏的就可以了
     this.dirty = true
   } else if (this.sync || !config.async) {
     this.run()
@@ -287,6 +329,8 @@ Watcher.prototype.run = function () {
 Watcher.prototype.evaluate = function () {
   // avoid overwriting another watcher that is being
   // collected.
+  // 因为lazy watcher的evaluate()可能是在一个指令watcher的get过程中执行的,
+  // 所以指令的依赖收集过程并没有完成,所以先用current缓存起来,lazy watcher计算完成之后再改回去
   var current = Dep.target
   this.value = this.get()
   this.dirty = false

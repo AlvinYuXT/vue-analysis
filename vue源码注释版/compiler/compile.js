@@ -31,7 +31,7 @@ const transitionRE = /^(v-bind:|:)?transition$/
 
 // default directive priority
 const DEFAULT_PRIORITY = 1000
-// 优先值大于两千才可是终端指令
+// 优先值大于两千才可能是终端指令
 const DEFAULT_TERMINAL_PRIORITY = 2000
 
 /**
@@ -81,6 +81,7 @@ export function compile (el, options, partial) {
     // cache childNodes before linking parent, fix #657
     var childNodes = toArray(el.childNodes)
     // link
+    // 任何link都是包裹在linkAndCapture中执行的,详见linkAndCapture函数
     var dirs = linkAndCapture(function compositeLinkCapturer () {
       if (nodeLinkFn) nodeLinkFn(vm, el, host, scope, frag)
       if (childLinkFn) childLinkFn(vm, childNodes, host, scope, frag)
@@ -96,9 +97,16 @@ export function compile (el, options, partial) {
  * @param {Function} linker
  * @param {Vue} vm
  */
-
+// link函数的执行过程会生成新的Directive实例,push到_directives数组中
+// 而这些_directives并没有建立对应的watcher,watcher也没有收集依赖,
+// 一切都还处于初始阶段,因此capture需要找到这些新添加的directive,
+// 依次执行_bind,在_bind里会进行watcher生成,执行指令的bind和update,完成响应式构建
 function linkAndCapture (linker, vm) {
   /* istanbul ignore if */
+  // vm._directives存放的都是已经_bind过的,在生产环境下没必要保留他们,
+  // 只需要在Vue卸载的时候执行unlink,unlink函数已经闭包了这些指令
+  // 如果我们仍然保留他们在vm._directives里,那么卸载的时候就需要把他们splice out,
+  // 而这会是很大的性能开销(perf hit)
   if (process.env.NODE_ENV === 'production') {
     // reset directives before every capture in production
     // mode, so that when unlinking we don't need to splice
@@ -107,9 +115,12 @@ function linkAndCapture (linker, vm) {
     // useful for Vue's own tests.
     vm._directives = []
   }
+  // 先记录下数组里原先有多少元素,他们都是已经执行过_bind的,我们只_bind新添加的directive
   var originalDirCount = vm._directives.length
   linker()
+  // slice出新添加的指令们
   var dirs = vm._directives.slice(originalDirCount)
+  // 对指令进行优先级排序,使得后面指令的bind过程是按优先级从高到低进行的
   dirs.sort(directiveComparator)
   for (var i = 0, l = dirs.length; i < l; i++) {
     dirs[i]._bind()
@@ -229,10 +240,12 @@ export function compileRoot (el, options, contextOptions) {
       }
     } else {
       // non-component, just compile as a normal element.
+      // vue在非组件时,el上的指令也认为是有效的,所以直接拿去编译就好
       replacerLinkFn = compileDirectives(el.attributes, options)
     }
   } else if (process.env.NODE_ENV !== 'production' && containerAttrs) {
     // warn container directives for fragment instances
+    // 设置在el上的指令在片段实例的情况下不知道具体作用在哪个元素上,所以要warn一下
     var names = containerAttrs
       .filter(function (attr) {
         // allow vue-loader/vueify scoped css attributes
@@ -311,6 +324,7 @@ function compileElement (el, options) {
   // preprocess textareas.
   // textarea treats its text content as the initial value.
   // just bind it as an attr directive for value.
+
   // textarea元素是把tag中间的内容当做了他的value,这和input什么的不太一样
   // 因此大家写模板的时候通常是这样写: <textarea>{{hello}}</textarea>
   // 但是template转换成dom之后,这个内容跑到了textarea元素的value属性上,tag中间的内容是空的,
@@ -360,6 +374,8 @@ function compileTextNode (node, options) {
   }
 
   var tokens = parseText(node.wholeText)
+  // 没有token就意味着没有插值,
+  // 没有插值那么内容不需要任何更改,也不会是响应式的数据
   if (!tokens) {
     return null
   }
@@ -379,6 +395,9 @@ function compileTextNode (node, options) {
   var el, token
   for (var i = 0, l = tokens.length; i < l; i++) {
     token = tokens[i]
+    // '{{a}} vue {{b}}'这样一段插值得到的token中
+    // token[1]就是' vue ',tag为false,
+    // 直接用' vue ' createTextNode即可
     el = token.tag
       ? processTextToken(token, options)
       : document.createTextNode(token.value)
@@ -412,6 +431,7 @@ function processTextToken (token, options) {
     el = document.createTextNode(token.value)
   } else {
     if (token.html) {
+      // 这个comment元素形成一个锚点的作用,告诉vue哪个地方应该插入v-html生成的内容
       el = document.createComment('v-html')
       setTokenType('html')
     } else {
@@ -488,6 +508,7 @@ function compileNodeList (nodeList, options) {
       node.hasChildNodes()
         ? compileNodeList(node.childNodes, options)
         : null
+    // 为什么是紧邻着的push了nodeLinkFn和childLinkFn,请参见makeChildLinkFn注释
     linkFns.push(nodeLinkFn, childLinkFn)
   }
   return linkFns.length
@@ -511,6 +532,15 @@ function makeChildLinkFn (linkFns) {
       childrenLinkFn = linkFns[i++]
       // cache childNodes before linking parent, fix #657
       var childNodes = toArray(node.childNodes)
+      // 比如模板如下:
+      // <div>
+      //      <div id="a"><span>a</span><div>
+      //      <div><span>b</span><div>
+      // </div>
+      // link时,遍历外层div的子元素,遍历到#a时
+      // 然后就把<div id="a"><div>交给nodeLinkFn,
+      // 然后把#a的childNodes:<span>a</span> 交给childLinkFn
+      // 每轮遍历会同时遍历到元素和元素的childNodes,所以当时就把他们的link函数push在相邻的位置
       if (nodeLinkFn) {
         nodeLinkFn(vm, node, host, scope, frag)
       }
@@ -554,6 +584,7 @@ function checkElementDirectives (el, options) {
 function checkComponent (el, options) {
   var component = checkComponentAttr(el, options)
   if (component) {
+    // 遍历el上的attribute,检测有无v-ref
     var ref = findRef(el)
     var descriptor = {
       name: 'component',
@@ -566,6 +597,7 @@ function checkComponent (el, options) {
     }
     var componentLinkFn = function (vm, el, host, scope, frag) {
       if (ref) {
+        // 如果定义了ref,则需要把$refs上的对应属性设置为响应式的
         defineReactive((scope || vm).$refs, ref, null)
       }
       vm._bindDir(descriptor, el, host, scope, frag)
@@ -694,17 +726,22 @@ function compileDirectives (attrs, options) {
   var attr, name, value, rawName, rawValue, dirName, arg, modifiers, dirDef, tokens, matched
   while (i--) {
     attr = attrs[i]
+    //存放属性的全名
     name = rawName = attr.name
+    //存放属性在dom里的值
     value = rawValue = attr.value
     tokens = parseText(value)
     // reset arg
     arg = null
     // check modifiers
     modifiers = parseModifiers(name)
+    //name存放删除掉修饰符部分的属性名称
     name = name.replace(modifierRE, '')
 
     // attribute interpolations
     if (tokens) {
+      // 有tokens,那就一定是'{{a}}'这样的插值模板,那就一定对应v-bind指令,
+      // 因为hello="{{people}}" 等价于 :hello="people"
       value = tokensToExp(tokens)
       arg = name
       pushDir('bind', publicDirectives.bind, tokens)
@@ -738,6 +775,7 @@ function compileDirectives (attrs, options) {
     if (bindRE.test(name)) {
       dirName = name.replace(bindRE, '')
       if (dirName === 'style' || dirName === 'class') {
+        // 这里不设置arg,这就使得v-bind指令的update函数里会执行this.handleObject而不是this.handleSingle
         pushDir(dirName, internalDirectives[dirName])
       } else {
         arg = dirName
@@ -769,8 +807,10 @@ function compileDirectives (attrs, options) {
    * @param {Object|Function} def
    * @param {Array} [interpTokens]
    */
-
+  // rawName,rawValue等变量都是父级作用域也就是compileDirectives函数内的那些变量
+  // 他们在进入这个函数前就已经设置好了.
   function pushDir (dirName, def, interpTokens) {
+    // 遍历所有插值token,只要一个是oneTime,那么整个表达式就是oneTime的
     var hasOneTimeToken = interpTokens && hasOneTime(interpTokens)
     var parsed = !hasOneTimeToken && parseDirective(value)
     dirs.push({
@@ -786,6 +826,11 @@ function compileDirectives (attrs, options) {
       expression: parsed && parsed.expression,
       filters: parsed && parsed.filters,
       interp: interpTokens,
+      // 这个用来记录是否是单次插值的属性只会在bind指令中用到,
+      // bind指令的bind阶段检测到这个属性之后会执行parseExpression,然后隐式的处理单次插值的情况
+      // 处理后的expression表达式是这样的: 举个栗子,'"hello " + " world " + "!"'
+      // 这个纯字符串字面量的表达式的求值过程不会触发任何响应式属性的getter,
+      // 也就不存在依赖,自然也就不会存在响应式更新的情况,这就是单次插值的整个实现原理
       hasOneTime: hasOneTimeToken
     })
   }
