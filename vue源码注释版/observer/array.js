@@ -44,7 +44,7 @@ export const arrayMethods = Object.create(arrayProto)
     }
     // 如果有新元素添加,先对他们执行observe
     if (inserted) ob.observeArray(inserted)
-    // notify change
+    // notify change 走的是Observer的dep并不是闭包里面的
     ob.dep.notify()
     return result
   })

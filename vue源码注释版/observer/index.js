@@ -39,6 +39,9 @@ export function withoutConversion (fn) {
 
 export function Observer (value) {
   this.value = value
+  // 这个def是用来处理删除添加属性的问题的
+  // 利用vue.$set vue.$delete的时候会通过这个dep执行notify
+  // 所有的数组方法也是走的这个dep
   this.dep = new Dep()
   def(value, '__ob__', this)
 
